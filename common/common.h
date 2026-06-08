@@ -129,6 +129,30 @@ enum common_conversation_mode {
     COMMON_CONVERSATION_MODE_AUTO     = 2,
 };
 
+enum common_context_shift_policy {
+    COMMON_CONTEXT_SHIFT_POLICY_FIFO       = 0,
+    COMMON_CONTEXT_SHIFT_POLICY_IMPORTANCE = 1,
+};
+
+enum common_context_shift_role {
+    COMMON_CONTEXT_SHIFT_ROLE_UNKNOWN   = 0,
+    COMMON_CONTEXT_SHIFT_ROLE_SYSTEM    = 1,
+    COMMON_CONTEXT_SHIFT_ROLE_USER      = 2,
+    COMMON_CONTEXT_SHIFT_ROLE_ASSISTANT = 3,
+};
+
+const char * common_context_shift_policy_to_str(common_context_shift_policy policy);
+common_context_shift_policy common_context_shift_policy_from_str(const std::string & value);
+
+int32_t common_context_shift_select_discard_start(
+        common_context_shift_policy policy,
+        int32_t n_tokens,
+        const std::vector<common_context_shift_role> & roles,
+        const std::vector<float> & omega_ledger,
+        int32_t n_keep,
+        int32_t n_discard,
+        int32_t n_recent_keep);
+
 enum common_grammar_trigger_type {
     COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN,
     COMMON_GRAMMAR_TRIGGER_TYPE_WORD,
@@ -434,6 +458,7 @@ struct common_params {
     int32_t n_batch               =  2048; // logical batch size for prompt processing (must be >=32 to use BLAS)
     int32_t n_ubatch              =   512; // physical batch size for prompt processing (must be >=32 to use BLAS)
     int32_t n_keep                =     0; // number of tokens to keep from initial prompt
+    int32_t n_ctx_shift_recent    =    64; // number of most recent tokens protected by importance-aware context shift
     int32_t n_chunks              =    -1; // max number of chunks to process (-1 = unlimited)
     int32_t n_parallel            =     1; // number of parallel sequences to decode
     int32_t n_sequences           =     1; // number of sequences to decode
@@ -549,6 +574,7 @@ struct common_params {
     bool no_perf           = false; // disable performance metrics
     bool show_timings      = true;  // show timing information on CLI
     bool ctx_shift         = false; // context shift on infinite text generation
+    common_context_shift_policy ctx_shift_policy = COMMON_CONTEXT_SHIFT_POLICY_FIFO;
     bool swa_full          = false; // use full-size SWA cache (https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)
     bool kv_unified        = false; // enable unified KV cache
 

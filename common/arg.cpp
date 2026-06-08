@@ -1374,6 +1374,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_PERPLEXITY}).set_env("LLAMA_ARG_CONTEXT_SHIFT"));
     add_opt(common_arg(
+        {"--ctx-shift-policy"}, "{fifo,importance}",
+        string_format("context shift discard-span selection policy (default: %s)", common_context_shift_policy_to_str(params.ctx_shift_policy)),
+        [](common_params & params, const std::string & value) {
+            params.ctx_shift_policy = common_context_shift_policy_from_str(value);
+        }
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CONTEXT_SHIFT_POLICY"));
+    add_opt(common_arg(
+        {"--ctx-shift-recent-keep"}, "N",
+        string_format("number of most recent tokens protected by importance-aware context shift (default: %d)", params.n_ctx_shift_recent),
+        [](common_params & params, int value) {
+            params.n_ctx_shift_recent = std::max(0, value);
+        }
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CONTEXT_SHIFT_RECENT_KEEP"));
+    add_opt(common_arg(
         {"--chunks"}, "N",
         string_format("max number of chunks to process (default: %d, -1 = all)", params.n_chunks),
         [](common_params & params, int value) {

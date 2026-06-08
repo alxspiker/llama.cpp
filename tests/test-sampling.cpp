@@ -1,5 +1,6 @@
 #include "ggml.h"
 #include "llama.h"
+#include "common.h"
 
 #ifdef NDEBUG
 #undef NDEBUG
@@ -190,6 +191,51 @@ static void test_top_n_sigma(const std::vector<float> & probs, const std::vector
     DUMP(&tester.cur_p);
 
     tester.check();
+}
+
+static void test_context_shift_span_selector() {
+    const std::vector<common_context_shift_role> roles = {
+        COMMON_CONTEXT_SHIFT_ROLE_SYSTEM, COMMON_CONTEXT_SHIFT_ROLE_SYSTEM, COMMON_CONTEXT_SHIFT_ROLE_USER, COMMON_CONTEXT_SHIFT_ROLE_USER,
+        COMMON_CONTEXT_SHIFT_ROLE_ASSISTANT, COMMON_CONTEXT_SHIFT_ROLE_ASSISTANT, COMMON_CONTEXT_SHIFT_ROLE_ASSISTANT, COMMON_CONTEXT_SHIFT_ROLE_ASSISTANT,
+        COMMON_CONTEXT_SHIFT_ROLE_ASSISTANT, COMMON_CONTEXT_SHIFT_ROLE_ASSISTANT, COMMON_CONTEXT_SHIFT_ROLE_ASSISTANT, COMMON_CONTEXT_SHIFT_ROLE_ASSISTANT,
+        COMMON_CONTEXT_SHIFT_ROLE_ASSISTANT, COMMON_CONTEXT_SHIFT_ROLE_ASSISTANT,
+    };
+    const std::vector<float> omega = {
+        1.0f, 1.0f, 1.0f, 1.0f,
+        0.20f, 0.20f, 0.20f, 0.20f,
+        0.85f, 0.85f, 0.85f, 0.85f,
+        0.10f, 0.10f,
+    };
+
+    const int32_t fifo_start = common_context_shift_select_discard_start(
+            COMMON_CONTEXT_SHIFT_POLICY_FIFO, 14, roles, omega, 4, 4, 2);
+    GGML_ASSERT(fifo_start == 4);
+
+    const int32_t importance_start = common_context_shift_select_discard_start(
+            COMMON_CONTEXT_SHIFT_POLICY_IMPORTANCE, 14, roles, omega, 4, 4, 2);
+    GGML_ASSERT(importance_start == 4);
+
+    const int32_t protected_recent = common_context_shift_select_discard_start(
+            COMMON_CONTEXT_SHIFT_POLICY_IMPORTANCE, 14, roles, omega, 4, 4, 8);
+    GGML_ASSERT(protected_recent == 4);
+
+    const std::vector<common_context_shift_role> wall_roles = {
+        COMMON_CONTEXT_SHIFT_ROLE_SYSTEM, COMMON_CONTEXT_SHIFT_ROLE_SYSTEM, COMMON_CONTEXT_SHIFT_ROLE_USER, COMMON_CONTEXT_SHIFT_ROLE_USER,
+        COMMON_CONTEXT_SHIFT_ROLE_USER, COMMON_CONTEXT_SHIFT_ROLE_USER, COMMON_CONTEXT_SHIFT_ROLE_USER, COMMON_CONTEXT_SHIFT_ROLE_USER,
+        COMMON_CONTEXT_SHIFT_ROLE_ASSISTANT, COMMON_CONTEXT_SHIFT_ROLE_ASSISTANT, COMMON_CONTEXT_SHIFT_ROLE_ASSISTANT, COMMON_CONTEXT_SHIFT_ROLE_ASSISTANT,
+    };
+    const std::vector<float> wall_omega = {
+        1.0f, 1.0f, 1.0f, 1.0f,
+        0.05f, 0.05f, 0.05f, 0.05f,
+        0.50f, 0.50f, 0.50f, 0.50f,
+    };
+    const int32_t wall_protected = common_context_shift_select_discard_start(
+            COMMON_CONTEXT_SHIFT_POLICY_IMPORTANCE, 12, wall_roles, wall_omega, 4, 4, 0);
+    GGML_ASSERT(wall_protected == 8);
+
+    const int32_t empty_ledger = common_context_shift_select_discard_start(
+            COMMON_CONTEXT_SHIFT_POLICY_IMPORTANCE, 12, {}, {}, 4, 4, 0);
+    GGML_ASSERT(empty_ledger == 4);
 }
 
 static llama_token_data_array make_token_data_array(const std::vector<float> & probs, std::vector<llama_token_data> & cur) {
@@ -415,6 +461,7 @@ int main(void) {
     test_top_n_sigma({0.1f, 0.2f, 0.3f, 0.4f}, {0.1f, 0.2f, 0.3f, 0.4f}, 0.00f); // top_n_sigma == 0 now represents a no-op rather than greedy decoding as of PR#13345
     test_top_n_sigma({0.1f, 0.2f, 0.3f, 0.4f}, {0.4f, 0.3f, 0.2f, 0.1f}, 3.00f);
     test_viscosity();
+    test_context_shift_span_selector();
 
     test_sampler_queue(10000, "k", 10000, 1.0f, 1.0f);
     test_sampler_queue(10000, "k",     1, 1.0f, 1.0f);

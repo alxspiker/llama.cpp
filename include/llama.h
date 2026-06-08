@@ -1452,6 +1452,9 @@ extern "C" {
                                float   lambda,
                                float   prior_floor);
 
+    /// @return the last accepted viscosity omega value, or 0.50f when the sampler chain does not contain viscosity
+    LLAMA_API float llama_sampler_get_last_omega(const struct llama_sampler * smpl);
+
     LLAMA_API struct llama_sampler * llama_sampler_init_logit_bias(
                              int32_t   n_vocab,
                              int32_t   n_logit_bias,

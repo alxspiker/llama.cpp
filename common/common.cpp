@@ -22,6 +22,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <regex>
 #include <sstream>
 #include <string>
@@ -65,6 +66,90 @@ common_time_meas::~common_time_meas() {
     if (t_start_us >= 0) {
         t_acc += ggml_time_us() - t_start_us;
     }
+}
+
+const char * common_context_shift_policy_to_str(common_context_shift_policy policy) {
+    switch (policy) {
+        case COMMON_CONTEXT_SHIFT_POLICY_FIFO:       return "fifo";
+        case COMMON_CONTEXT_SHIFT_POLICY_IMPORTANCE: return "importance";
+    }
+
+    return "fifo";
+}
+
+common_context_shift_policy common_context_shift_policy_from_str(const std::string & value) {
+    if (value == "fifo") {
+        return COMMON_CONTEXT_SHIFT_POLICY_FIFO;
+    }
+
+    if (value == "importance") {
+        return COMMON_CONTEXT_SHIFT_POLICY_IMPORTANCE;
+    }
+
+    throw std::invalid_argument("invalid context shift policy: " + value);
+}
+
+static float common_context_shift_ledger_importance(
+        const common_context_shift_role role,
+        const float omega) {
+    if (role == COMMON_CONTEXT_SHIFT_ROLE_SYSTEM || role == COMMON_CONTEXT_SHIFT_ROLE_USER) {
+        return 1.0f;
+    }
+
+    return std::max(0.0f, std::min(1.0f, omega));
+}
+
+int32_t common_context_shift_select_discard_start(
+        common_context_shift_policy policy,
+        int32_t n_tokens,
+        const std::vector<common_context_shift_role> & roles,
+        const std::vector<float> & omega_ledger,
+        int32_t n_keep,
+        int32_t n_discard,
+        int32_t n_recent_keep) {
+    if (policy == COMMON_CONTEXT_SHIFT_POLICY_FIFO || n_discard <= 0 || n_tokens <= 0) {
+        return n_keep;
+    }
+
+    n_keep        = std::max(0, std::min(n_keep, n_tokens));
+    n_discard     = std::max(0, std::min(n_discard, n_tokens - n_keep));
+    n_recent_keep = std::max(0, n_recent_keep);
+
+    if (n_discard <= 0) {
+        return n_keep;
+    }
+
+    const int32_t last_start = n_tokens - n_recent_keep - n_discard;
+    if (last_start <= n_keep) {
+        return n_keep;
+    }
+
+    std::vector<float> importance((size_t) n_tokens, 1.0f);
+    for (int32_t i = 0; i < n_tokens; ++i) {
+        const common_context_shift_role role = (size_t) i < roles.size() ? roles[(size_t) i] : COMMON_CONTEXT_SHIFT_ROLE_UNKNOWN;
+        const float omega = (size_t) i < omega_ledger.size() ? omega_ledger[(size_t) i] : 0.50f;
+        importance[(size_t) i] = common_context_shift_ledger_importance(role, omega);
+    }
+
+    std::vector<double> prefix((size_t) n_tokens + 1, 0.0);
+    for (int32_t i = 0; i < n_tokens; ++i) {
+        prefix[(size_t) i + 1] = prefix[(size_t) i] + importance[(size_t) i];
+    }
+
+    int32_t best_start = n_keep;
+    double best_score = std::numeric_limits<double>::infinity();
+
+    for (int32_t start = n_keep; start <= last_start; ++start) {
+        const int32_t end = start + n_discard;
+        const double score = (prefix[(size_t) end] - prefix[(size_t) start]) / n_discard;
+
+        if (score < best_score) {
+            best_score = score;
+            best_start = start;
+        }
+    }
+
+    return best_start;
 }
 
 //

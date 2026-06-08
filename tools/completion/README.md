@@ -229,6 +229,8 @@ llama-completion.exe -m models\gemma-1.1-7b-it.Q4_K_M.gguf --ignore-eos -n -1
 | `--display-prompt, --no-display-prompt` | whether to print prompt at generation (default: true) |
 | `-co, --color [on\|off\|auto]` | Colorize output to distinguish prompt and user input from generations ('on', 'off', or 'auto', default: 'auto')<br/>'auto' enables colors when output is to a terminal |
 | `--context-shift, --no-context-shift` | whether to use context shift on infinite text generation (default: disabled)<br/>(env: LLAMA_ARG_CONTEXT_SHIFT) |
+| `--ctx-shift-policy {fifo,importance}` | context shift discard-span selection policy (default: fifo)<br/>(env: LLAMA_ARG_CONTEXT_SHIFT_POLICY) |
+| `--ctx-shift-recent-keep N` | number of most recent tokens protected by importance-aware context shift (default: 64)<br/>(env: LLAMA_ARG_CONTEXT_SHIFT_RECENT_KEEP) |
 | `-sys, --system-prompt PROMPT` | system prompt to use with model (if applicable, depending on chat template) |
 | `-sysf, --system-prompt-file FNAME` | a file containing the system prompt (default: none) |
 | `-ptc, --print-token-count N` | print token count every N tokens (default: -1) |
@@ -371,6 +373,8 @@ A value of -1 will enable infinite text generation, even though we have a finite
 If the pause is undesirable, a value of -2 will stop generation immediately when the context is filled.
 
 The `--no-context-shift` option allows you to stop the infinite text generation once the finite context window is full.
+
+When context shift is enabled, `--ctx-shift-policy fifo` keeps the existing behavior and discards the oldest contiguous span after `--keep`. `--ctx-shift-policy importance` scans the disposable middle of the context and discards the lowest-importance contiguous span instead. This is not KV compression and does not delete arbitrary individual tokens; it only changes the contiguous span selected for removal so RoPE position invariants are preserved. `--ctx-shift-recent-keep N` protects the newest N tokens from being selected as the discard span.
 
 It is important to note that the generated text may be shorter than the specified number of tokens if an End-of-Sequence (EOS) token or a reverse prompt is encountered. In interactive mode, text generation will pause and control will be returned to the user. In non-interactive mode, the program will end. In both cases, the text generation may stop before reaching the specified `--predict` value. If you want the model to keep going without ever producing End-of-Sequence on its own, you can use the `--ignore-eos` parameter.
 

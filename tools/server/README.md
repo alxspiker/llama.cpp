@@ -171,6 +171,8 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-kvu, --kv-unified, -no-kvu, --no-kv-unified` | use single unified KV buffer shared across all sequences (default: enabled if number of slots is auto)<br/>(env: LLAMA_ARG_KV_UNIFIED) |
 | `--cache-idle-slots, --no-cache-idle-slots` | save and clear idle slots on new task (default: enabled, requires unified KV and cache-ram)<br/>(env: LLAMA_ARG_CACHE_IDLE_SLOTS) |
 | `--context-shift, --no-context-shift` | whether to use context shift on infinite text generation (default: disabled)<br/>(env: LLAMA_ARG_CONTEXT_SHIFT) |
+| `--ctx-shift-policy {fifo,importance}` | context shift discard-span selection policy (default: fifo)<br/>(env: LLAMA_ARG_CONTEXT_SHIFT_POLICY) |
+| `--ctx-shift-recent-keep N` | number of most recent tokens protected by importance-aware context shift (default: 64)<br/>(env: LLAMA_ARG_CONTEXT_SHIFT_RECENT_KEEP) |
 | `-r, --reverse-prompt PROMPT` | halt generation at PROMPT, return control in interactive mode |
 | `-sp, --special` | special tokens output enabled (default: false) |
 | `--warmup, --no-warmup` | whether to perform warmup with an empty run (default: enabled) |
@@ -530,6 +532,10 @@ These words will not be included in the completion, so make sure to add them to 
 `return_tokens`: Return the raw generated token ids in the `tokens` field. Otherwise `tokens` remains empty. Default: `false`
 
 `samplers`: The order the samplers should be applied in. An array of strings representing sampler type names. If a sampler is not set, it will not be used. If a sampler is specified more than once, it will be applied multiple times. Default: `["dry", "top_k", "typ_p", "top_p", "min_p", "xtc", "temperature"]` - these are all the available values.
+
+`ctx_shift_policy`: Context shift discard-span selection policy. `fifo` keeps the existing behavior and discards the oldest contiguous span after `n_keep`. `importance` scans the disposable middle of the context and discards the lowest-importance contiguous span. This is not KV compression and does not delete arbitrary individual tokens; it only changes the contiguous span selected for removal so RoPE position invariants are preserved. Default: `fifo`
+
+`ctx_shift_recent_keep`: Number of most recent tokens protected from importance-aware discard-span selection. Default: `64`
 
 `timings_per_token`: Include prompt processing and text generation speed information in each response.  Default: `false`
 

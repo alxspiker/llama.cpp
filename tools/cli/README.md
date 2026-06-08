@@ -152,6 +152,8 @@
 | `-ctxcp, --ctx-checkpoints, --swa-checkpoints N` | max number of context checkpoints to create per slot (default: 32)[(more info)](https://github.com/ggml-org/llama.cpp/pull/15293)<br/>(env: LLAMA_ARG_CTX_CHECKPOINTS) |
 | `-cram, --cache-ram N` | set the maximum cache size in MiB (default: 8192, -1 - no limit, 0 - disable)[(more info)](https://github.com/ggml-org/llama.cpp/pull/16391)<br/>(env: LLAMA_ARG_CACHE_RAM) |
 | `--context-shift, --no-context-shift` | whether to use context shift on infinite text generation (default: disabled)<br/>(env: LLAMA_ARG_CONTEXT_SHIFT) |
+| `--ctx-shift-policy {fifo,importance}` | context shift discard-span selection policy (default: fifo)<br/>(env: LLAMA_ARG_CONTEXT_SHIFT_POLICY) |
+| `--ctx-shift-recent-keep N` | number of most recent tokens protected by importance-aware context shift (default: 64)<br/>(env: LLAMA_ARG_CONTEXT_SHIFT_RECENT_KEEP) |
 | `-sys, --system-prompt PROMPT` | system prompt to use with model (if applicable, depending on chat template) |
 | `--show-timings, --no-show-timings` | whether to show timing information after each response (default: true)<br/>(env: LLAMA_ARG_SHOW_TIMINGS) |
 | `-sysf, --system-prompt-file FNAME` | a file containing the system prompt (default: none) |

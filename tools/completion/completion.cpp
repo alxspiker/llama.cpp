@@ -246,6 +246,8 @@ int llama_completion(int argc, char ** argv) {
 
     std::string path_session = params.path_prompt_cache;
     std::vector<llama_token> session_tokens;
+    std::vector<common_context_shift_role> session_roles;
+    std::vector<float> session_omega;
 
     if (!path_session.empty()) {
         LOG_INF("%s: attempting to load saved session from '%s'\n", __func__, path_session.c_str());
@@ -378,6 +380,12 @@ int llama_completion(int argc, char ** argv) {
                     n_match = 0;
                 } else {
                     session_tokens.resize(n_match);
+                    if (session_roles.size() > n_match) {
+                        session_roles.resize(n_match);
+                    }
+                    if (session_omega.size() > n_match) {
+                        session_omega.resize(n_match);
+                    }
                 }
             }
         }
@@ -554,6 +562,8 @@ int llama_completion(int argc, char ** argv) {
     display = params.display_prompt;
 
     std::vector<llama_token> embd;
+    std::vector<common_context_shift_role> embd_roles;
+    std::vector<float> embd_omega;
 
     // single-token antiprompts
     std::vector<llama_token> antiprompt_token;
@@ -594,6 +604,8 @@ int llama_completion(int argc, char ** argv) {
             if ((int) embd.size() > max_embd_size) {
                 const int skipped_tokens = (int) embd.size() - max_embd_size;
                 embd.resize(max_embd_size);
+                embd_roles.resize(max_embd_size);
+                embd_omega.resize(max_embd_size);
 
                 console::set_display(DISPLAY_TYPE_ERROR);
                 LOG_WRN("<<input too long: skipped %d token%s>>", skipped_tokens, skipped_tokens != 1 ? "s" : "");
@@ -619,12 +631,34 @@ int llama_completion(int argc, char ** argv) {
 
                     const int n_left    = n_past - params.n_keep;
                     const int n_discard = n_left/2;
+                    int discard_start = params.n_keep;
 
-                    LOG_DBG("context full, swapping: n_past = %d, n_left = %d, n_ctx = %d, n_keep = %d, n_discard = %d\n",
-                            n_past, n_left, n_ctx, params.n_keep, n_discard);
+                    if (params.ctx_shift_policy == COMMON_CONTEXT_SHIFT_POLICY_IMPORTANCE && n_discard > 0) {
+                        discard_start = common_context_shift_select_discard_start(
+                                params.ctx_shift_policy,
+                                n_past,
+                                session_roles,
+                                session_omega,
+                                params.n_keep,
+                                n_discard,
+                                params.n_ctx_shift_recent);
+                    }
 
-                    llama_memory_seq_rm (mem, 0, params.n_keep            , params.n_keep + n_discard);
-                    llama_memory_seq_add(mem, 0, params.n_keep + n_discard, n_past, -n_discard);
+                    LOG_DBG("context full, swapping: n_past = %d, n_left = %d, n_ctx = %d, n_keep = %d, n_discard = %d, discard_start = %d, policy = %s\n",
+                            n_past, n_left, n_ctx, params.n_keep, n_discard, discard_start, common_context_shift_policy_to_str(params.ctx_shift_policy));
+
+                    llama_memory_seq_rm (mem, 0, discard_start            , discard_start + n_discard);
+                    llama_memory_seq_add(mem, 0, discard_start + n_discard, n_past, -n_discard);
+
+                    if ((int) session_tokens.size() >= n_past) {
+                        session_tokens.erase(session_tokens.begin() + discard_start, session_tokens.begin() + discard_start + n_discard);
+                    }
+                    if ((int) session_roles.size() >= n_past) {
+                        session_roles.erase(session_roles.begin() + discard_start, session_roles.begin() + discard_start + n_discard);
+                    }
+                    if ((int) session_omega.size() >= n_past) {
+                        session_omega.erase(session_omega.begin() + discard_start, session_omega.begin() + discard_start + n_discard);
+                    }
 
                     n_past -= n_discard;
 
@@ -665,6 +699,12 @@ int llama_completion(int argc, char ** argv) {
                 for ( ; i < embd.size(); i++) {
                     if (embd[i] != session_tokens[n_session_consumed]) {
                         session_tokens.resize(n_session_consumed);
+                        if (session_roles.size() > (size_t) n_session_consumed) {
+                            session_roles.resize(n_session_consumed);
+                        }
+                        if (session_omega.size() > (size_t) n_session_consumed) {
+                            session_omega.resize(n_session_consumed);
+                        }
                         break;
                     }
 
@@ -678,6 +718,8 @@ int llama_completion(int argc, char ** argv) {
                 }
                 if (i > 0) {
                     embd.erase(embd.begin(), embd.begin() + i);
+                    embd_roles.erase(embd_roles.begin(), embd_roles.begin() + i);
+                    embd_omega.erase(embd_omega.begin(), embd_omega.begin() + i);
                 }
             }
 
@@ -685,6 +727,8 @@ int llama_completion(int argc, char ** argv) {
                 const bool is_last_batch = (n_consumed >= (int) embd_inp.size());
                 const bool save_now = session_do_save && is_last_batch;
                 session_tokens.insert(session_tokens.end(), embd.begin(), embd.end());
+                session_roles.insert(session_roles.end(), embd_roles.begin(), embd_roles.end());
+                session_omega.insert(session_omega.end(), embd_omega.begin(), embd_omega.end());
                 if (!common_prompt_batch_decode(ctx, session_tokens, embd.size(), n_past, params.n_batch, path_session, save_now)) {
                     return 1;
                 }
@@ -703,6 +747,8 @@ int llama_completion(int argc, char ** argv) {
         }
 
         embd.clear();
+        embd_roles.clear();
+        embd_omega.clear();
 
         if ((int) embd_inp.size() <= n_consumed && !is_interacting) {
 
@@ -713,6 +759,8 @@ int llama_completion(int argc, char ** argv) {
             // LOG_DBG("last: %s\n", string_from(ctx, smpl->prev.to_vector()).c_str());
 
             embd.push_back(id);
+            embd_roles.push_back(COMMON_CONTEXT_SHIFT_ROLE_ASSISTANT);
+            embd_omega.push_back(llama_sampler_get_last_omega(common_sampler_get(smpl)));
 
             if (params.conversation_mode && !waiting_for_first_input && !llama_vocab_is_eog(vocab, id)) {
                 assistant_ss << common_token_to_piece(ctx, id, false);
@@ -730,6 +778,8 @@ int llama_completion(int argc, char ** argv) {
             LOG_DBG("embd_inp.size(): %d, n_consumed: %d\n", (int) embd_inp.size(), n_consumed);
             while ((int) embd_inp.size() > n_consumed) {
                 embd.push_back(embd_inp[n_consumed]);
+                embd_roles.push_back(COMMON_CONTEXT_SHIFT_ROLE_USER);
+                embd_omega.push_back(1.0f);
 
                 // push the prompt in the sampling context in order to apply repetition penalties later
                 // for the prompt, we don't apply grammar rules

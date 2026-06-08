@@ -122,6 +122,50 @@ struct server_slot {
     slot_state state = SLOT_STATE_IDLE;
 
     server_prompt prompt;
+    std::vector<common_context_shift_role> ctx_shift_roles;
+    std::vector<float> ctx_shift_omega;
+
+    void ctx_shift_ledger_push(common_context_shift_role role, float omega) {
+        ctx_shift_roles.push_back(role);
+        ctx_shift_omega.push_back(omega);
+    }
+
+    void ctx_shift_ledger_insert(size_t n, common_context_shift_role role, float omega) {
+        ctx_shift_roles.insert(ctx_shift_roles.end(), n, role);
+        ctx_shift_omega.insert(ctx_shift_omega.end(), n, omega);
+    }
+
+    void ctx_shift_ledger_clear() {
+        ctx_shift_roles.clear();
+        ctx_shift_omega.clear();
+    }
+
+    void ctx_shift_ledger_keep_first(size_t n) {
+        if (ctx_shift_roles.size() > n) {
+            ctx_shift_roles.resize(n);
+        }
+        if (ctx_shift_omega.size() > n) {
+            ctx_shift_omega.resize(n);
+        }
+    }
+
+    void ctx_shift_ledger_copy(size_t dst, size_t src) {
+        if (dst < ctx_shift_roles.size() && src < ctx_shift_roles.size()) {
+            ctx_shift_roles[dst] = ctx_shift_roles[src];
+        }
+        if (dst < ctx_shift_omega.size() && src < ctx_shift_omega.size()) {
+            ctx_shift_omega[dst] = ctx_shift_omega[src];
+        }
+    }
+
+    void ctx_shift_ledger_erase(size_t start, size_t n) {
+        if (start + n <= ctx_shift_roles.size()) {
+            ctx_shift_roles.erase(ctx_shift_roles.begin() + start, ctx_shift_roles.begin() + start + n);
+        }
+        if (start + n <= ctx_shift_omega.size()) {
+            ctx_shift_omega.erase(ctx_shift_omega.begin() + start, ctx_shift_omega.begin() + start + n);
+        }
+    }
 
     void prompt_save(server_prompt_cache & prompt_cache) const {
         GGML_ASSERT(prompt.data.size() == 0);
@@ -167,6 +211,7 @@ struct server_slot {
         }
 
         prompt.tokens.clear();
+        ctx_shift_ledger_clear();
     }
 
     std::vector<common_adapter_lora_info> lora;
@@ -178,6 +223,7 @@ struct server_slot {
     common_sampler_ptr smpl;
 
     llama_token sampled; // in speculative mode, this is the last accepted token
+    float sampled_omega = 0.50f;
 
     // stats
     size_t n_sent_text = 0; // number of sent text character
@@ -366,7 +412,9 @@ struct server_slot {
         }
 
         prompt.tokens.push_back(sampled);
+        ctx_shift_ledger_push(COMMON_CONTEXT_SHIFT_ROLE_ASSISTANT, sampled_omega);
         prompt.tokens.insert(spec_draft);
+        ctx_shift_ledger_insert(spec_draft.size(), COMMON_CONTEXT_SHIFT_ROLE_ASSISTANT, 0.50f);
     }
 
     void release() {
@@ -1432,6 +1480,7 @@ private:
                 if (lora_should_clear_cache(slot.lora, task_loras)) {
                     SLT_TRC(slot, "clearing cache for lora change. %zu loras -> %zu loras\n", slot.lora.size(), task.params.lora.size());
                     slot.prompt.tokens.clear();
+                    slot.ctx_shift_ledger_clear();
                 } else {
                     SLT_TRC(slot, "keeping cache for alora. %zu target loras\n", task_loras.size());
                 }
@@ -2279,12 +2328,15 @@ private:
                     size_t nread = llama_state_seq_load_file(ctx_tgt, filepath.c_str(), slot->id, tokens.data(), tokens.size(), &token_count);
                     if (nread == 0) {
                         slot->prompt.tokens.clear(); // KV may already been invalidated?
+                        slot->ctx_shift_ledger_clear();
                         send_error(task, "Unable to restore slot, no available space in KV cache or invalid slot save file", ERROR_TYPE_INVALID_REQUEST);
                         break;
                     }
                     tokens.resize(token_count);
                     slot->prompt.tokens.clear();
                     slot->prompt.tokens.insert(tokens);
+                    slot->ctx_shift_ledger_clear();
+                    slot->ctx_shift_ledger_insert(tokens.size(), COMMON_CONTEXT_SHIFT_ROLE_UNKNOWN, 0.50f);
 
                     const int64_t t_end = ggml_time_us();
                     const double t_restore_ms = (t_end - t_start) / 1000.0;
@@ -2431,16 +2483,29 @@ private:
                 n_keep = std::min(slot.n_ctx - 4, n_keep);
 
                 const int n_left    = slot.prompt.n_tokens() - n_keep;
-                const int n_discard = slot.task->params.n_discard ? slot.task->params.n_discard : (n_left / 2);
+                const int n_discard = std::min(n_left, slot.task->params.n_discard ? slot.task->params.n_discard : (n_left / 2));
+                int discard_start = n_keep;
 
-                SLT_WRN(slot, "slot context shift, n_keep = %d, n_left = %d, n_discard = %d\n", n_keep, n_left, n_discard);
+                if (slot.task->params.ctx_shift_policy == COMMON_CONTEXT_SHIFT_POLICY_IMPORTANCE && n_discard > 0 && !slot.prompt.tokens.has_mtmd) {
+                    discard_start = common_context_shift_select_discard_start(
+                            slot.task->params.ctx_shift_policy,
+                            slot.prompt.n_tokens(),
+                            slot.ctx_shift_roles,
+                            slot.ctx_shift_omega,
+                            n_keep,
+                            n_discard,
+                            slot.task->params.n_ctx_shift_recent);
+                }
 
-                common_context_seq_rm (ctx_tgt, slot.id, n_keep            , n_keep + n_discard);
-                common_context_seq_add(ctx_tgt, slot.id, n_keep + n_discard, slot.prompt.n_tokens(), -n_discard);
+                SLT_WRN(slot, "slot context shift, n_keep = %d, n_left = %d, n_discard = %d, discard_start = %d, policy = %s\n",
+                        n_keep, n_left, n_discard, discard_start, common_context_shift_policy_to_str(slot.task->params.ctx_shift_policy));
+
+                common_context_seq_rm (ctx_tgt, slot.id, discard_start            , discard_start + n_discard);
+                common_context_seq_add(ctx_tgt, slot.id, discard_start + n_discard, slot.prompt.n_tokens(), -n_discard);
 
                 if (ctx_dft) {
-                    common_context_seq_rm (ctx_dft.get(), slot.id, n_keep            , n_keep + n_discard);
-                    common_context_seq_add(ctx_dft.get(), slot.id, n_keep + n_discard, slot.prompt.tokens.pos_next(), -n_discard);
+                    common_context_seq_rm (ctx_dft.get(), slot.id, discard_start            , discard_start + n_discard);
+                    common_context_seq_add(ctx_dft.get(), slot.id, discard_start + n_discard, slot.prompt.tokens.pos_next(), -n_discard);
                 }
 
                 // add generated tokens to cache
@@ -2449,7 +2514,7 @@ private:
                     GGML_ASSERT(!slot.prompt.tokens.has_mtmd);
 
                     llama_tokens new_tokens = slot.prompt.tokens.get_tokens(); // copy
-                    for (size_t i = n_keep + n_discard; i < new_tokens.size(); i++) {
+                    for (size_t i = discard_start + n_discard; i < new_tokens.size(); i++) {
                         new_tokens[i - n_discard] = new_tokens[i];
                     }
 
@@ -2457,6 +2522,7 @@ private:
 
                     slot.prompt.tokens.clear();
                     slot.prompt.tokens.insert(new_tokens);
+                    slot.ctx_shift_ledger_erase(discard_start, n_discard);
                 }
 
                 slot.truncated = true;
@@ -2763,6 +2829,7 @@ private:
 
                                             for (size_t i = 0; i < n_match; i++) {
                                                 slot.prompt.tokens.set_token(head_p + i, slot.prompt.tokens[head_c + i]);
+                                                slot.ctx_shift_ledger_copy(head_p + i, head_c + i);
                                                 n_past++;
                                             }
 
@@ -2897,6 +2964,7 @@ private:
                         slot.n_prompt_tokens_processed = 0;
 
                         slot.prompt.tokens.keep_first(n_past);
+                        slot.ctx_shift_ledger_keep_first(n_past);
 
                         // this is to signal the client that the request has started processing
                         if (slot.task->params.stream) {
@@ -2990,6 +3058,7 @@ private:
                         {
                             const auto & chunk = input_tokens.find_chunk(slot.prompt.n_tokens());
                             slot.prompt.tokens.push_back(chunk.get()); // copy
+                            slot.ctx_shift_ledger_insert(n_tokens_out, COMMON_CONTEXT_SHIFT_ROLE_UNKNOWN, 0.50f);
                         }
 
                         has_mtmd = true;
@@ -3023,6 +3092,7 @@ private:
                             { slot.id },
                             slot.need_embd());
                         slot.prompt.tokens.push_back(cur_tok);
+                        slot.ctx_shift_ledger_push(COMMON_CONTEXT_SHIFT_ROLE_USER, 1.0f);
 
                         slot.n_prompt_tokens_processed++;
 
@@ -3368,6 +3438,7 @@ private:
                 slot.i_batch = -1;
 
                 common_sampler_accept(slot.smpl.get(), id, true);
+                slot.sampled_omega = llama_sampler_get_last_omega(common_sampler_get(slot.smpl.get()));
 
                 // here we have synchronized the llama_context (due to the sampling above), so we can do time measurement
                 const int64_t t_current = ggml_time_us();
@@ -3459,6 +3530,7 @@ private:
                             }
 
                             slot.prompt.tokens.keep_first(ckpt.n_tokens);
+                            slot.ctx_shift_ledger_keep_first(ckpt.n_tokens);
                             slot.smpl = std::move(smpl_save);
 
                             continue;
@@ -3485,7 +3557,9 @@ private:
 
                 // add accepted tokens to the prompt
                 slot.prompt.tokens.keep_first(slot.prompt.n_tokens() - n_draft);
+                slot.ctx_shift_ledger_keep_first(slot.prompt.n_tokens() - n_draft);
                 slot.prompt.tokens.insert({ids.begin(), ids.end() - 1});
+                slot.ctx_shift_ledger_insert(ids.size() - 1, COMMON_CONTEXT_SHIFT_ROLE_ASSISTANT, 0.50f);
 
                 slot.sampled = ids.back(); // last accepted token
                 SLT_DBG(slot, "add accepted tokens: sampled=%d, ids.size=%zu, n_draft=%zu\n", slot.sampled, ids.size(), n_draft);

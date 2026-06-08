@@ -56,11 +56,14 @@ struct task_params {
 
     int32_t n_keep    =  0; // number of tokens to keep from initial prompt
     int32_t n_discard =  0; // number of tokens after n_keep that may be discarded when shifting context, 0 defaults to half
+    int32_t n_ctx_shift_recent = 64; // number of most recent tokens protected by importance-aware context shift
     int32_t n_predict = -1; // new tokens to predict
     int32_t n_indent  =  0; // minimum line indentation for the generated text in number of whitespace characters
     int32_t n_cmpl    =  1; // number of completions to generate from this prompt
 
     int32_t n_cache_reuse = 0; // min chunk size to attempt reusing from the cache via KV shifting (0 = disabled)
+
+    common_context_shift_policy ctx_shift_policy = COMMON_CONTEXT_SHIFT_POLICY_FIFO;
 
     // number of prompt tokens before the latest user message
     int32_t n_before_user = -1;

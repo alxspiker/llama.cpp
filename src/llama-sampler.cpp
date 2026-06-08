@@ -4049,6 +4049,28 @@ uint32_t llama_sampler_get_seed(const struct llama_sampler * smpl) {
     return LLAMA_DEFAULT_SEED;
 }
 
+float llama_sampler_get_last_omega(const struct llama_sampler * smpl) {
+    if (smpl == nullptr) {
+        return 0.50f;
+    }
+
+    if (smpl->iface == &llama_sampler_viscosity_i) {
+        return ((const llama_sampler_viscosity *) smpl->ctx)->omega_prev;
+    }
+
+    if (smpl->iface == &llama_sampler_chain_i) {
+        const auto * ctx = (const llama_sampler_chain *) smpl->ctx;
+        for (auto it = ctx->samplers.rbegin(); it != ctx->samplers.rend(); ++it) {
+            const float omega = llama_sampler_get_last_omega(it->ptr);
+            if (omega != 0.50f) {
+                return omega;
+            }
+        }
+    }
+
+    return 0.50f;
+}
+
 // perf
 
 struct llama_perf_sampler_data llama_perf_sampler(const struct llama_sampler * chain) {

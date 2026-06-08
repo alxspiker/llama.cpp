@@ -71,6 +71,8 @@ json task_params::to_json(bool only_metrics) const {
             {"n_predict",                 n_predict}, // TODO: deduplicate?
             {"n_keep",                    n_keep},
             {"n_discard",                 n_discard},
+            {"ctx_shift_policy",          common_context_shift_policy_to_str(ctx_shift_policy)},
+            {"ctx_shift_recent_keep",     n_ctx_shift_recent},
             {"ignore_eos",                sampling.ignore_eos},
             {"stream",                    stream},
             {"n_probs",                   sampling.n_probs},
@@ -127,6 +129,8 @@ json task_params::to_json(bool only_metrics) const {
         {"n_predict",                 n_predict}, // TODO: deduplicate?
         {"n_keep",                    n_keep},
         {"n_discard",                 n_discard},
+        {"ctx_shift_policy",          common_context_shift_policy_to_str(ctx_shift_policy)},
+        {"ctx_shift_recent_keep",     n_ctx_shift_recent},
         {"ignore_eos",                sampling.ignore_eos},
         {"stream",                    stream},
         {"logit_bias",                format_logit_bias(sampling.logit_bias)},
@@ -257,6 +261,8 @@ task_params server_task::params_from_json_cmpl(
     defaults.sampling      = params_base.sampling;
     defaults.speculative   = params_base.speculative;
     defaults.n_keep        = params_base.n_keep;
+    defaults.n_ctx_shift_recent = params_base.n_ctx_shift_recent;
+    defaults.ctx_shift_policy   = params_base.ctx_shift_policy;
     defaults.n_predict     = params_base.n_predict;
     defaults.n_cache_reuse = params_base.n_cache_reuse;
     defaults.cache_prompt  = params_base.cache_prompt;
@@ -278,6 +284,8 @@ task_params server_task::params_from_json_cmpl(
     params.n_keep           = json_value(data,       "n_keep",             defaults.n_keep);
     params.n_discard        = json_value(data,       "n_discard",          defaults.n_discard);
     params.n_discard        = std::max(0, params.n_discard);
+    params.n_ctx_shift_recent = std::max(0, json_value(data, "ctx_shift_recent_keep", defaults.n_ctx_shift_recent));
+    params.ctx_shift_policy = common_context_shift_policy_from_str(json_value(data, "ctx_shift_policy", std::string(common_context_shift_policy_to_str(defaults.ctx_shift_policy))));
     params.n_cmpl           = json_value(data,       "n_cmpl",             json_value(data, "n", 1));
     params.n_cache_reuse    = json_value(data,       "n_cache_reuse",      defaults.n_cache_reuse);
     //params.t_max_prompt_ms  = json_value(data,       "t_max_prompt_ms",    defaults.t_max_prompt_ms); // TODO: implement
